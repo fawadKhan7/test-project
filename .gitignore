@@ -22,6 +22,7 @@
 
 # misc
 .DS_Store
+Thumbs.db
 *.pem
 
 # debug
@@ -29,6 +30,18 @@ npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
+
+# editors
+.idea/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/settings.json
+
+# agent tooling
+# launch.json is shared (it is how the dev server gets started); the local
+# settings file is per-machine and holds one developer's permission choices.
+.claude/settings.local.json
+.playwright-mcp/
 
 # env files (can opt-in for committing if needed)
 .env*

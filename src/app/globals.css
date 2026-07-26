@@ -1,26 +1,319 @@
 @import "tailwindcss";
 
+/* ============================================================
+   YELLOW LINE TAXI — bold Bauhaus system
+   Yellow + black only. Hard offset shadows, geometric blocks,
+   poster typography, checkerboard. High energy on purpose.
+   ============================================================ */
+
 :root {
-  --background: #ffffff;
-  --foreground: #171717;
+  --ink: #0b0b0b;
+  --ink-soft: #151515;
+  --ink-line: #2a2a2a;
+
+  --yellow: #ffd100;
+  --yellow-deep: #e0b800;
+
+  --cream: #fffbea;
+  --cream-dim: #b8b3a0;
 }
 
 @theme inline {
-  --color-background: var(--background);
-  --color-foreground: var(--foreground);
-  --font-sans: var(--font-geist-sans);
-  --font-mono: var(--font-geist-mono);
+  --color-ink: var(--ink);
+  --color-ink-soft: var(--ink-soft);
+  --color-ink-line: var(--ink-line);
+  --color-yellow: var(--yellow);
+  --color-yellow-deep: var(--yellow-deep);
+  --color-cream: var(--cream);
+  --color-cream-dim: var(--cream-dim);
+
+  --color-background: var(--ink);
+  --color-foreground: var(--cream);
+
+  --font-sans: var(--font-inter);
+  --font-display: var(--font-display);
+  --font-mono: var(--font-mono);
+
+  --animate-marquee: marquee 32s linear infinite;
+  --animate-marquee2: marquee2 32s linear infinite;
 }
 
-@media (prefers-color-scheme: dark) {
-  :root {
-    --background: #0a0a0a;
-    --foreground: #ededed;
+@keyframes marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes marquee2 {
+  0% {
+    transform: translateX(100%);
+  }
+  100% {
+    transform: translateX(0%);
   }
 }
 
 body {
-  background: var(--background);
-  color: var(--foreground);
-  font-family: Arial, Helvetica, sans-serif;
+  background: var(--ink);
+  color: var(--cream);
+  font-family: var(--font-inter), system-ui, sans-serif;
+  -webkit-text-size-adjust: 100%;
+}
+
+.font-display {
+  font-family: var(--font-display), system-ui, sans-serif;
+  letter-spacing: -0.02em;
+  line-height: 0.95;
+}
+
+.tabular {
+  font-family: var(--font-mono), ui-monospace, monospace;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Taxi checker — pure yellow/black, no images. */
+.checker {
+  background-image:
+    linear-gradient(45deg, var(--ink) 25%, transparent 25%),
+    linear-gradient(-45deg, var(--ink) 25%, transparent 25%),
+    linear-gradient(45deg, transparent 75%, var(--ink) 75%),
+    linear-gradient(-45deg, transparent 75%, var(--ink) 75%);
+  background-size: 24px 24px;
+  background-position:
+    0 0,
+    0 12px,
+    12px -12px,
+    -12px 0;
+  background-color: var(--yellow);
+}
+
+.dot-grid {
+  background-image: radial-gradient(var(--ink-line) 1.5px, transparent 1.5px);
+  background-size: 28px 28px;
+}
+
+:where(a, button, input, select, textarea, summary):focus-visible {
+  outline: 3px solid var(--yellow);
+  outline-offset: 3px;
+  border-radius: 2px;
+}
+
+.on-yellow :where(a, button, input, select, textarea, summary):focus-visible {
+  outline-color: var(--ink);
+}
+
+/* ============================================================
+   Motion staging — only under `.anim`, set by a blocking <head>
+   script when reduced motion is NOT requested. No JS or reduced
+   motion => class never lands => nothing is ever stuck invisible.
+   ============================================================ */
+
+.anim [data-reveal],
+.anim [data-hero-item],
+.anim [data-hero-panel],
+.anim [data-hero-punch] {
+  opacity: 0;
+}
+
+.anim [data-hero-title] {
+  perspective: 800px;
+}
+
+.anim [data-hero-title] .char {
+  transform-origin: 50% 100%;
+}
+
+.anim [data-hero-highlight] {
+  transform: scaleX(0);
+  transform-origin: left center;
+}
+
+/* The taxi guide rail is a progressive enhancement: without motion
+   it simply isn't rendered, and the page reads normally. */
+.taxi-rail-road {
+  stroke-dasharray: 10 12;
+}
+
+/* ============================================================
+   FIRST-PERSON DRIVE
+   `drive-3d` is set on <html> before first paint by the head
+   script. It swaps the scrolling site for the cab without a
+   flash, and is removed again the moment anyone skips the drive.
+   ============================================================ */
+
+.drive-splash {
+  display: none;
+}
+
+.drive-3d .drive-splash {
+  display: flex;
+}
+
+.drive-3d .drive-classic {
+  display: none;
+}
+
+/* The road fills the viewport, so the document itself must not scroll. */
+.drive-3d,
+.drive-3d body {
+  height: 100%;
+  overflow: hidden;
+  overscroll-behavior: none;
+}
+
+/* Matches the scene's fog colour, so the sky above the skyline is seamless
+   where the transparent canvas shows the stage through. */
+.drive-stage {
+  background: #050505;
+}
+
+/* ---------- Section screens (real DOM standing in the 3D world) ----------
+   Each screen is a CSS3DObject: a normal element that CSS3DRenderer
+   transforms into the scene. Type stays vector-sharp at any distance and the
+   booking form keeps working, which a texture could never do. */
+
+[data-drive-board] {
+  /* Invisible from behind rather than showing mirrored text. */
+  backface-visibility: hidden;
+}
+
+/* Glass, not a wall: the layer draws over the finished 3D frame, so this
+   alpha blends against the actual road behind it. Kept dark enough that
+   cream body text still clears 4.5:1 over the brightest thing out there. */
+.drive-board {
+  position: relative;
+  display: flex;
+  height: 100%;
+  width: 100%;
+  flex-direction: column;
+  overflow: hidden;
+  border: 3px solid var(--yellow);
+  background: rgba(9, 9, 9, 0.9);
+  box-shadow:
+    0 0 0 1px rgba(255, 209, 0, 0.35),
+    0 0 90px rgba(255, 209, 0, 0.22),
+    inset 0 0 60px rgba(255, 209, 0, 0.05);
+}
+
+.drive-board-head {
+  position: relative;
+  flex: none;
+  border-bottom: 3px solid var(--yellow);
+  background: rgba(255, 209, 0, 0.92);
+  padding: 14px 26px;
+}
+
+/* Projector bar along the bottom edge, so the panel reads as something the
+   cab is casting rather than a window floating in space. */
+.drive-board::after {
+  content: "";
+  position: absolute;
+  right: 12%;
+  bottom: -7px;
+  left: 12%;
+  height: 3px;
+  background: var(--yellow);
+  box-shadow: 0 0 22px 4px rgba(255, 209, 0, 0.55);
+}
+
+.drive-board-head p {
+  font-size: 15px;
+  font-weight: 700;
+  letter-spacing: 0.2em;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.drive-board-head h2 {
+  margin-top: 2px;
+  font-family: var(--font-display), system-ui, sans-serif;
+  font-size: 38px;
+  line-height: 0.95;
+  text-transform: uppercase;
+  color: var(--ink);
+}
+
+.drive-board-body {
+  min-height: 0;
+  flex: 1;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding: 26px 28px 32px;
+  scrollbar-width: thin;
+  scrollbar-color: var(--yellow) var(--ink-soft);
+}
+
+.drive-board-body::-webkit-scrollbar {
+  width: 14px;
+}
+
+.drive-board-body::-webkit-scrollbar-track {
+  background: var(--ink-soft);
+}
+
+.drive-board-body::-webkit-scrollbar-thumb {
+  background: var(--yellow);
+  border: 3px solid var(--ink-soft);
+}
+
+.drive-board-body {
+  padding: 20px 24px 26px;
+  /* The sections were typed for a full browser window, and their clamp()
+     sizes are keyed to vw. Inside an 800px panel that makes the hero type
+     absurd, so the panel becomes its own container and the display sizes are
+     re-derived from its width instead of the viewport's. */
+  container-type: inline-size;
+}
+
+.drive-board-body h1 {
+  font-size: clamp(1.25rem, 4.4cqw, 2.2rem);
+}
+
+.drive-board-body h2 {
+  font-size: clamp(1.05rem, 3.2cqw, 1.6rem);
+}
+
+.drive-board-body h3 {
+  font-size: clamp(0.9rem, 2cqw, 1.1rem);
+}
+
+/* Long-form copy stays inside a readable measure whatever the panel width. */
+.drive-board-body p {
+  max-width: 62ch;
+}
+
+@keyframes drive-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
+}
+
+@media (prefers-reduced-motion: no-preference) {
+  .drive-pulse {
+    animation: drive-pulse 1.6s ease-in-out infinite;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.001ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.001ms !important;
+    scroll-behavior: auto !important;
+  }
+
+  .animate-marquee,
+  .animate-marquee2 {
+    animation: none !important;
+    transform: none !important;
+  }
 }
