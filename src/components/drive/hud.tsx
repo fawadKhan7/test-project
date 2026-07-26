@@ -19,6 +19,7 @@ import {
   ChevronDown,
   CornerUpLeft,
   CornerUpRight,
+  MapPin,
   Navigation,
   RotateCcw,
   TriangleAlert,
@@ -114,6 +115,33 @@ export function ControlLegend({ dimmed }: { dimmed: boolean }) {
   );
 }
 
+/* ------------------------------------------------------------- arrival */
+
+/**
+ * Replaces the driving instruments while parked at a stop.
+ *
+ * Everything the HUD shows while moving — speed, gear, the map, the next
+ * manoeuvre — is answering a question nobody has when the car is stationary
+ * and there is a wall of text to read. So the instruments step aside and this
+ * takes their place: where you are, and the one thing you can do next.
+ */
+export function ArrivalChip({ label }: { label: string }) {
+  return (
+    <div
+      className={cn(panel, "border-yellow flex items-center gap-3 px-3.5 py-2")}
+      role="status"
+      aria-live="polite"
+    >
+      <MapPin className="text-yellow h-4 w-4 shrink-0" aria-hidden="true" strokeWidth={2.5} />
+      <span className="font-display text-yellow text-sm uppercase">{label}</span>
+      <span className="bg-ink-line h-4 w-px" aria-hidden="true" />
+      <span className="text-cream-dim text-[0.62rem] font-bold tracking-[0.16em] uppercase">
+        Drive on when you&rsquo;re ready
+      </span>
+    </div>
+  );
+}
+
 /* ------------------------------------------------------------ off-road */
 
 export function OffRoadWarning({ onReset }: { onReset: () => void }) {
@@ -169,12 +197,14 @@ export function NavMap({
   distance,
   turn,
   atBoard,
+  arrived,
 }: {
   canvasRef: React.RefObject<HTMLCanvasElement | null>;
   hint: string;
   distance: number | null;
   turn: TurnCue;
   atBoard: string | null;
+  arrived: boolean;
 }) {
   const TurnIcon = TURN_ICON[turn];
   /** Turns are called out from 60m, the way a satnav does the final prompt. */
@@ -229,7 +259,16 @@ export function NavMap({
           )}
         >
           {atBoard ? (
-            <span className="text-yellow">{atBoard}</span>
+            <span className="flex items-center gap-2">
+              <span className="text-yellow">{atBoard}</span>
+              {/* The way out, stated where the visitor is already looking.
+                  Nothing has to be dismissed — driving is the dismissal. */}
+              {arrived && (
+                <span className="text-cream-dim border-ink-line border-l pl-2 text-[0.58rem] font-bold tracking-[0.14em]">
+                  Drive on to continue
+                </span>
+              )}
+            </span>
           ) : (
             <>
               {hint}

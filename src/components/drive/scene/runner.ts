@@ -31,15 +31,25 @@ import { MAX_SPEED, createVehicle, stepVehicle, toMph } from "@/lib/drive/vehicl
 import { readInput, type Controls } from "@/lib/drive/controls";
 import { buildWorld } from "./build-world";
 import { buildCockpit } from "./cockpit";
-import { buildBoards } from "./boards";
+import { buildCarBody } from "./car-body";
+import { buildBoards, screenPosition } from "./boards";
 import { buildNavRoute } from "./nav-route";
+import { DRIVE_FOV, SHELL_SWAP, createCameraRig } from "./camera-rig";
 import { PAINT, SURFACE, YELLOW, makeGlowTexture } from "./textures";
 
 /** Night blue-black rather than pure black: it separates sky from tarmac. */
 const FOG_COLOUR = 0x080a0f;
 const FOG_DENSITY = 0.0052;
-/** Vertical field of view when stopped. Speed widens it further. */
-const BASE_FOV = 80;
+
+/**
+ * What counts as "arrived": near the middle of a stop, and stopped. Both are
+ * required — rolling through a plaza is not an arrival, and the speed gate is
+ * what lets the driver leave simply by driving.
+ */
+const ARRIVE_PRESENCE = 0.35;
+const ARRIVE_MPH = 2.5;
+/** Hysteresis, so idling on the threshold cannot flip the camera back and forth. */
+const LEAVE_MPH = 5;
 
 /** Which way the next manoeuvre goes, for the HUD's arrow. */
 export type TurnCue = "left" | "right" | "straight" | "around";
@@ -56,6 +66,8 @@ export type Telemetry = {
   turn: TurnCue;
   /** The screen the cab is currently parked at, if any. */
   atBoard: string | null;
+  /** True once the camera has stepped out of the cab to frame a screen. */
+  arrived: boolean;
 };
 
 export type RunnerOptions = {
@@ -117,8 +129,8 @@ export function createRunner(opts: RunnerOptions): Runner {
 
   /* --------------------------------------------------------------- boards */
 
-  // Layered above the canvas so the panel's alpha blends against the rendered
-  // world — you see the road through the hologram.
+  // Layered above the canvas so a screen's alpha blends against the rendered
+  // world — you see the city through the hologram.
   const boards = buildBoards(opts.hosts);
   container.appendChild(boards.domElement);
 
@@ -128,18 +140,26 @@ export function createRunner(opts: RunnerOptions): Runner {
   scene.add(carGroup);
 
   // Body sits between the car and the camera so load transfer tilts the
-  // interior and the view together, the way a real body roll would.
+  // interior, the shell and the view together, the way a real body roll would.
   const bodyGroup = new THREE.Group();
   carGroup.add(bodyGroup);
 
+  // Two shells for the same car: the interior frames the road while driving,
+  // the exterior is what you have arrived to look at. Exactly one is ever
+  // drawn — see SHELL_SWAP below.
   const cockpit = buildCockpit(maxAniso);
   bodyGroup.add(cockpit.group);
 
+  const carBody = buildCarBody(maxAniso);
+  carBody.group.visible = false;
+  bodyGroup.add(carBody.group);
+
   // Wide by road-car standards, on purpose: it opens up the windscreen so
-  // more of the junction is visible without leaving the driver's seat.
-  const camera = new THREE.PerspectiveCamera(BASE_FOV, 1, 0.05, 700);
-  camera.position.copy(cockpit.eye);
-  bodyGroup.add(camera);
+  // more of the junction is visible without leaving the driver's seat. The rig
+  // owns its transform, so it lives in the scene rather than on the car.
+  const camera = new THREE.PerspectiveCamera(DRIVE_FOV, 1, 0.05, 700);
+  scene.add(camera);
+  const rig = createCameraRig();
 
   // Headlight spill on the road ahead. Cheaper and more legible at night than
   // a real spot light, and it keeps the flat-colour look intact.
@@ -172,9 +192,6 @@ export function createRunner(opts: RunnerOptions): Runner {
     boards.setSize(width, height);
     camera.aspect = width / height;
     camera.updateProjectionMatrix();
-    // Panel world size is derived from the frame, so it always fills the same
-    // share of the windscreen whatever the window is doing.
-    boards.setProjection(camera.aspect, BASE_FOV);
   };
   resize();
 
@@ -378,6 +395,12 @@ export function createRunner(opts: RunnerOptions): Runner {
   let viewRoll = 0;
   let viewPitch = 0;
   let viewLean = 0;
+  /** Latched arrival state, and the screen the camera frames while it holds. */
+  let arrived = false;
+  // Resolved on the first frame, from whichever zone the cab spawns in.
+  let anchor: THREE.Vector3 | null = null;
+  let driveFov = DRIVE_FOV;
+  const eye = cockpit.eye.clone();
 
   /** Frame-rate independent approach, matching the one the physics uses. */
   const approach = (current: number, target: number, rate: number, dt: number) =>
@@ -418,38 +441,64 @@ export function createRunner(opts: RunnerOptions): Runner {
     bodyGroup.position.x = shakeX;
 
     // Head lean: the driver's eye drifts a touch into the corner.
-    camera.position.x = cockpit.eye.x - viewLean * 0.03;
-    camera.rotation.z = -viewLean * 0.035;
+    eye.set(cockpit.eye.x - viewLean * 0.03, cockpit.eye.y, cockpit.eye.z);
 
     // Speed widens the lens. This does most of the work in making 26 m/s
     // actually feel fast on a screen.
-    const targetFov = BASE_FOV + speedRatio * 12;
-    if (Math.abs(camera.fov - targetFov) > 0.04) {
-      camera.fov = approach(camera.fov, targetFov, 3.5, dt);
-      camera.updateProjectionMatrix();
-    }
+    driveFov = approach(driveFov, DRIVE_FOV + speedRatio * 12, 3.5, dt);
 
     cockpit.update(vehicle.steer, toMph(vehicle.speed), vehicle.speed < -0.2);
+    carBody.update(vehicle.steer, vehicle.wheelSpin);
     world.update(elapsed);
     nav.update(dt, elapsed);
 
-    beamMat.opacity = 0.34 + speedRatio * 0.22;
+    // Headlight spill, dimmed once the camera is outside the car — from there
+    // it is a flat glowing sheet on the tarmac rather than light on the road.
+    beamMat.opacity = (0.34 + speedRatio * 0.22) * (1 - rig.blend * 0.75);
 
     /* --- which section are we at? ---------------------------------------- */
+    const mph = toMph(vehicle.speed);
     const zone = zonePresence(vehicle.x, vehicle.z);
     if (zone.id !== lastZone) {
       lastZone = zone.id;
-      boards.setActive(zone.id);
+      anchor = zone.id ? screenPosition(zone.id) : null;
       if (zone.id) opts.onVisit(zone.id);
     }
 
+    /* --- driving, or arrived? -------------------------------------------- */
+    // Latching with two speed thresholds: you have to actually come to rest to
+    // arrive, but any real move pulls the camera back into the cab. Anything
+    // in between leaves the current view alone, so sitting on the line does
+    // not oscillate.
+    if (!zone.id || zone.presence < ARRIVE_PRESENCE || mph > LEAVE_MPH) {
+      arrived = false;
+    } else if (mph < ARRIVE_MPH && zone.presence >= ARRIVE_PRESENCE) {
+      arrived = true;
+    }
+
+    rig.update({
+      camera,
+      dt,
+      arrived,
+      eye,
+      body: bodyGroup,
+      roll: -viewLean * 0.035,
+      anchor,
+      driveFov,
+    });
+
+    // Exactly one shell, swapped while the camera is moving fastest through
+    // the roof, where the change is least visible.
+    const outside = rig.blend > SHELL_SWAP;
+    cockpit.group.visible = !outside;
+    carBody.group.visible = outside;
+
     /* --- render ---------------------------------------------------------- */
-    const mph = toMph(vehicle.speed);
     renderer.render(scene, camera);
 
     // The hologram layer draws over the finished frame, so its transparency
     // blends with the actual world behind it.
-    boards.update(camera, dt, mph, zone.presence);
+    boards.update(camera, dt);
     boards.render(camera);
 
     /* --- outbound state -------------------------------------------------- */
@@ -466,6 +515,7 @@ export function createRunner(opts: RunnerOptions): Runner {
         hintDistance,
         turn,
         atBoard: zone.id,
+        arrived: rig.blend > 0.5,
       });
     }
 
@@ -516,6 +566,7 @@ export function createRunner(opts: RunnerOptions): Runner {
       nav.dispose();
       world.dispose();
       cockpit.dispose();
+      carBody.dispose();
       beamGeo.dispose();
       beamMat.dispose();
       beamTex.dispose();

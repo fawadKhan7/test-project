@@ -1,22 +1,29 @@
 /**
- * The section holograms — the site itself, projected into the world.
+ * The section screens — the site itself, installed in the city.
  *
- * Each one is a real DOM element positioned in 3D by CSS3DRenderer rather
- * than a texture, which is what makes them worth doing: the type stays sharp
- * at any distance, the booking form still works, links are still links, and
- * screen readers still see a page. A texture would have been a picture of a
- * website; this is the website.
+ * Each one is a real DOM element positioned in 3D by CSS3DRenderer rather than
+ * a texture, which is what makes them worth doing: the type stays sharp at any
+ * distance, the booking form still works, links are still links, and screen
+ * readers still see a page. A texture would have been a picture of a website;
+ * this is the website.
  *
- * The panel is not bolted to a wall. When you pull into a stop it glides into
- * place a fixed distance in front of the windscreen and squares itself to
- * your view, so it is readable the instant it appears and the driver never
- * has to shuffle back and forth hunting for the one good angle. Touch the
- * throttle and it fades out of the way again.
+ * Each screen stands at a fixed place in the world — high and set well back
+ * from its parking bay — and never moves. That is the whole design. A screen
+ * pinned to the camera is unavoidably in the way, because there is no head
+ * position that escapes it; a screen bolted to a place gets bigger as you
+ * approach, fills the frame when you park in front of it, and is simply behind
+ * you once you drive off.
  *
- * Compositing: this layer sits *above* the WebGL canvas, so the panel's alpha
- * blends against the rendered world — you can see the road through it. That
- * is also why it needs no depth trickery: a hologram projected from the cab
- * is supposed to read in front of everything.
+ * Fading is by distance in both directions. Far away it is off because there
+ * is nothing to read yet; *very* close it is also off, because pulling up
+ * underneath a 22-metre display would put it across the entire windscreen —
+ * the one thing this layout exists to prevent.
+ *
+ * Compositing: this layer sits above the WebGL canvas, so a screen's alpha
+ * blends against the rendered world and it is never occluded by geometry. The
+ * arrival camera is framed around that: the screen sits in the upper part of
+ * the frame and the cab in the lower, so the two never fight for the same
+ * pixels.
  */
 
 import * as THREE from "three";
@@ -24,44 +31,54 @@ import {
   CSS3DObject,
   CSS3DRenderer,
 } from "three/addons/renderers/CSS3DRenderer.js";
-import { HOLO } from "@/lib/drive/world-map";
+import { HOLO, PANEL_ANCHORS } from "@/lib/drive/world-map";
 
 export type Boards = {
   /** Append this above the WebGL canvas. */
   domElement: HTMLElement;
   setSize(width: number, height: number): void;
-  /** Keeps the panel's world size pinned to a share of the viewport. */
-  setProjection(aspect: number, verticalFovDeg: number): void;
-  /** Which section is showing, or null for none. */
-  setActive(id: string | null): void;
-  /**
-   * `presence` is how close the cab is to the middle of the stop, 0..1. It is
-   * the panel's opacity ceiling, so driving away dims it continuously rather
-   * than leaving it lit until some threshold trips.
-   */
-  update(
-    camera: THREE.PerspectiveCamera,
-    dt: number,
-    mph: number,
-    presence: number,
-  ): void;
+  /** Fades each screen by how far the camera is from it. */
+  update(camera: THREE.PerspectiveCamera, dt: number): void;
   render(camera: THREE.PerspectiveCamera): void;
   dispose(): void;
 };
 
-/** Above this speed the panel is fully out of the way. */
-const FADE_START_MPH = 5;
-const FADE_END_MPH = 15;
-/** How quickly the panel chases the view. Low enough to feel physical. */
-const GLIDE_RATE = 5;
+/** Metres. Below `NEAR_OUT` the screen is off; by `NEAR_IN` it is fully lit. */
+const NEAR_OUT = 12;
+const NEAR_IN = 19;
 /**
- * Fading in is unhurried — the panel should arrive, not pop. Fading out is
- * roughly four times quicker, because by then the driver has decided to leave
- * and anything still in the windscreen is in the way. (Exit faster than enter
- * is the general rule for UI motion; here it is also a visibility issue.)
+ * And it fades away again between these, so distant stops stay quiet. `FAR_IN`
+ * has to clear the arrival camera's own distance — it stands 15m further back
+ * than the cab does — or the screen would dim at exactly the moment the camera
+ * pulls out to look at it.
  */
+const FAR_IN = 52;
+const FAR_OUT = 92;
+
+/**
+ * A screen only lights up when the camera is more or less looking at it.
+ *
+ * This is the rule that keeps them out of the driver's way, and it exists
+ * because of angular size: 26 metres of screen at 30 metres' range subtends
+ * about 50°, so one sitting off to the side does not politely occupy the
+ * corner of a wide driving lens — it wraps past the edge of the frame and
+ * smears across it. Off-axis, therefore, is off.
+ *
+ * It costs nothing elsewhere. Driving up to a stop you are pointed straight at
+ * its screen, and the arrival camera aims at the screen by construction, so
+ * the two cases that matter are both dead centre.
+ */
+const AXIS_IN = Math.cos(THREE.MathUtils.degToRad(18));
+const AXIS_OUT = Math.cos(THREE.MathUtils.degToRad(34));
+
+/** Fade rates, per second. Out is quicker than in, as with any exit. */
 const FADE_IN_RATE = 4.5;
-const FADE_OUT_RATE = 16;
+const FADE_OUT_RATE = 11;
+
+const smoothstep = (edge0: number, edge1: number, x: number) => {
+  const t = THREE.MathUtils.clamp((x - edge0) / (edge1 - edge0), 0, 1);
+  return t * t * (3 - 2 * t);
+};
 
 export function buildBoards(hosts: Map<string, HTMLElement>): Boards {
   const scene = new THREE.Scene();
@@ -71,43 +88,49 @@ export function buildBoards(hosts: Map<string, HTMLElement>): Boards {
   dom.style.position = "absolute";
   dom.style.inset = "0";
   dom.style.zIndex = "2";
-  // Only the panel itself takes pointer input; the space around it must stay
-  // transparent to clicks.
+  // Only the screens themselves take pointer input; the space around them must
+  // stay transparent to clicks so the HUD underneath keeps working.
   dom.style.pointerEvents = "none";
 
-  type Entry = { id: string; host: HTMLElement; object: CSS3DObject };
-  const entries = new Map<string, Entry>();
+  /** Metres per CSS pixel. Fixed, because the screen has a physical size. */
+  const scale = HOLO.worldWidth / HOLO.pxW;
+
+  type Entry = {
+    id: string;
+    host: HTMLElement;
+    object: CSS3DObject;
+    /** Screen centre, for the distance fade and for the camera to aim at. */
+    position: THREE.Vector3;
+    opacity: number;
+  };
+  const entries: Entry[] = [];
 
   for (const [id, host] of hosts) {
+    const anchor = PANEL_ANCHORS[id];
+    if (!anchor) continue;
+
     host.style.width = `${HOLO.pxW}px`;
     host.style.height = `${HOLO.pxH}px`;
 
     const object = new CSS3DObject(host);
+    object.position.set(anchor.x, anchor.y, anchor.z);
+    object.rotation.y = anchor.rotY;
+    object.scale.setScalar(scale);
     object.visible = false;
     scene.add(object);
-    entries.set(id, { id, host, object });
+
+    entries.push({
+      id,
+      host,
+      object,
+      position: object.position.clone(),
+      opacity: 0,
+    });
   }
 
-  let activeId: string | null = null;
-  /** The panel currently being drawn, which outlives `activeId` while it fades. */
-  let shown: Entry | null = null;
-  /** True once the cab has left the stop: `shown` is on its way out. */
-  let leaving = false;
-  let opacity = 0;
-  let scale = HOLO.screenFraction / HOLO.pxW;
-  /** Set on activation so a freshly shown panel doesn't fly in from the map. */
-  let needsSnap = false;
-
-  const hide = (e: Entry | null) => {
-    if (!e) return;
-    e.object.visible = false;
-    e.host.style.opacity = "0";
-  };
-
   const camPos = new THREE.Vector3();
-  const camQuat = new THREE.Quaternion();
   const forward = new THREE.Vector3();
-  const target = new THREE.Vector3();
+  const toScreen = new THREE.Vector3();
 
   return {
     domElement: dom,
@@ -116,98 +139,40 @@ export function buildBoards(hosts: Map<string, HTMLElement>): Boards {
       renderer.setSize(width, height);
     },
 
-    setProjection(aspect, verticalFovDeg) {
-      // Screen share is independent of viewport pixels: the world width that
-      // fills a given fraction of the frame depends only on fov and distance.
-      const halfV = (verticalFovDeg * Math.PI) / 360;
-      const worldWidth =
-        2 * HOLO.screenFraction * HOLO.distance * Math.tan(halfV) * aspect;
-      scale = worldWidth / HOLO.pxW;
-    },
+    update(camera, dt) {
+      camera.getWorldPosition(camPos);
+      camera.getWorldDirection(forward);
 
-    setActive(id) {
-      if (id === activeId) return;
-      activeId = id;
+      for (const e of entries) {
+        const d = camPos.distanceTo(e.position);
+        toScreen.subVectors(e.position, camPos).normalize();
+        const onAxis = smoothstep(AXIS_OUT, AXIS_IN, forward.dot(toScreen));
 
-      if (!id) {
-        // Left the stop. The panel stops tracking the windscreen from here on,
-        // so it stays where it was projected and the cab drives away from it —
-        // which is what makes leaving read as leaving rather than as a panel
-        // that happens to switch off.
-        leaving = shown !== null;
-        return;
-      }
+        const wanted =
+          smoothstep(NEAR_OUT, NEAR_IN, d) *
+          (1 - smoothstep(FAR_IN, FAR_OUT, d)) *
+          onAxis;
 
-      leaving = false;
-      const next = entries.get(id) ?? null;
-      if (next !== shown) {
-        hide(shown);
-        shown = next;
-        opacity = 0;
-        needsSnap = true;
-      }
-    },
+        const rate = wanted < e.opacity ? FADE_OUT_RATE : FADE_IN_RATE;
+        e.opacity += (wanted - e.opacity) * (1 - Math.exp(-rate * dt));
 
-    update(camera, dt, mph, presence) {
-      if (!shown) return;
-
-      // Speed pushes the panel out of the way so it never blocks the road, and
-      // distance from the bay caps it so it is already faint by the time the
-      // cab is clear of the stop.
-      const speedFade =
-        1 -
-        THREE.MathUtils.clamp(
-          (mph - FADE_START_MPH) / (FADE_END_MPH - FADE_START_MPH),
-          0,
-          1,
-        );
-      const wanted = leaving
-        ? 0
-        : Math.min(speedFade, THREE.MathUtils.clamp(presence, 0, 1));
-
-      const rate = wanted < opacity ? FADE_OUT_RATE : FADE_IN_RATE;
-      opacity += (wanted - opacity) * (1 - Math.exp(-rate * dt));
-
-      if (opacity < 0.02 && wanted === 0) {
-        opacity = 0;
-        hide(shown);
-        // Whatever brings it back should place it fresh in front of the
-        // windscreen rather than flying it in from wherever it went dark.
-        needsSnap = true;
-        // Only drop the reference once the cab has genuinely left; a panel
-        // dimmed by speed alone stays loaded so easing off brings it straight
-        // back without a re-entry animation.
-        if (leaving) {
-          shown = null;
-          leaving = false;
+        if (e.opacity < 0.02) {
+          e.opacity = 0;
+          if (e.object.visible) {
+            e.object.visible = false;
+            e.host.style.opacity = "0";
+            // Nothing behind a hidden screen should be clickable.
+            e.host.style.pointerEvents = "none";
+          }
+          continue;
         }
-        return;
+
+        e.object.visible = true;
+        e.host.style.opacity = e.opacity.toFixed(3);
+        // Only take clicks once it is actually readable, so a screen fading
+        // past the windscreen never swallows a stray one.
+        e.host.style.pointerEvents = e.opacity > 0.6 ? "auto" : "none";
       }
-
-      if (!leaving) {
-        camera.getWorldPosition(camPos);
-        camera.getWorldQuaternion(camQuat);
-        forward.set(0, 0, -1).applyQuaternion(camQuat);
-
-        target
-          .copy(camPos)
-          .addScaledVector(forward, HOLO.distance)
-          .setY(camPos.y + HOLO.riseY);
-
-        if (needsSnap) {
-          shown.object.position.copy(target);
-          shown.object.quaternion.copy(camQuat);
-          needsSnap = false;
-        } else {
-          const k = 1 - Math.exp(-GLIDE_RATE * dt);
-          shown.object.position.lerp(target, k);
-          shown.object.quaternion.slerp(camQuat, k);
-        }
-      }
-
-      shown.object.scale.setScalar(scale);
-      shown.object.visible = true;
-      shown.host.style.opacity = opacity.toFixed(3);
     },
 
     render(camera) {
@@ -215,9 +180,15 @@ export function buildBoards(hosts: Map<string, HTMLElement>): Boards {
     },
 
     dispose() {
-      for (const e of entries.values()) e.object.removeFromParent();
-      entries.clear();
+      for (const e of entries) e.object.removeFromParent();
+      entries.length = 0;
       dom.remove();
     },
   };
+}
+
+/** Where a given section's screen stands, for the camera to frame. */
+export function screenPosition(id: string): THREE.Vector3 | null {
+  const a = PANEL_ANCHORS[id];
+  return a ? new THREE.Vector3(a.x, a.y, a.z) : null;
 }

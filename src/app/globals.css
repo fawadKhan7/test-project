@@ -180,9 +180,14 @@ body {
   backface-visibility: hidden;
 }
 
-/* Glass, not a wall: the layer draws over the finished 3D frame, so this
-   alpha blends against the actual road behind it. Kept dark enough that
-   cream body text still clears 4.5:1 over the brightest thing out there. */
+/* A 22-metre display standing at the destination, viewed from ~40m away by
+   the arrival camera. Everything below is sized for that: heavier frame,
+   larger type, stronger glow — all of which would be gaudy on a panel held a
+   few metres from your face, and are simply legible at this distance.
+
+   The layer draws over the finished 3D frame, so the alpha here blends
+   against the actual city behind it. Kept dark enough that cream body text
+   still clears 4.5:1 over the brightest thing out there. */
 .drive-board {
   position: relative;
   display: flex;
@@ -190,37 +195,37 @@ body {
   width: 100%;
   flex-direction: column;
   overflow: hidden;
-  border: 3px solid var(--yellow);
-  background: rgba(9, 9, 9, 0.9);
+  border: 5px solid var(--yellow);
+  background: rgba(9, 9, 9, 0.92);
   box-shadow:
-    0 0 0 1px rgba(255, 209, 0, 0.35),
-    0 0 90px rgba(255, 209, 0, 0.22),
-    inset 0 0 60px rgba(255, 209, 0, 0.05);
+    0 0 0 2px rgba(255, 209, 0, 0.4),
+    0 0 140px rgba(255, 209, 0, 0.28),
+    inset 0 0 90px rgba(255, 209, 0, 0.06);
 }
 
 .drive-board-head {
   position: relative;
   flex: none;
-  border-bottom: 3px solid var(--yellow);
-  background: rgba(255, 209, 0, 0.92);
-  padding: 14px 26px;
+  border-bottom: 5px solid var(--yellow);
+  background: rgba(255, 209, 0, 0.94);
+  padding: 20px 34px;
 }
 
-/* Projector bar along the bottom edge, so the panel reads as something the
-   cab is casting rather than a window floating in space. */
+/* Emitter bar along the bottom edge, so the screen reads as something
+   projected and powered rather than a rectangle hanging in the air. */
 .drive-board::after {
   content: "";
   position: absolute;
-  right: 12%;
-  bottom: -7px;
-  left: 12%;
-  height: 3px;
+  right: 10%;
+  bottom: -11px;
+  left: 10%;
+  height: 5px;
   background: var(--yellow);
-  box-shadow: 0 0 22px 4px rgba(255, 209, 0, 0.55);
+  box-shadow: 0 0 34px 7px rgba(255, 209, 0, 0.6);
 }
 
 .drive-board-head p {
-  font-size: 15px;
+  font-size: 19px;
   font-weight: 700;
   letter-spacing: 0.2em;
   text-transform: uppercase;
@@ -228,9 +233,9 @@ body {
 }
 
 .drive-board-head h2 {
-  margin-top: 2px;
+  margin-top: 4px;
   font-family: var(--font-display), system-ui, sans-serif;
-  font-size: 38px;
+  font-size: 52px;
   line-height: 0.95;
   text-transform: uppercase;
   color: var(--ink);
@@ -247,7 +252,8 @@ body {
 }
 
 .drive-board-body::-webkit-scrollbar {
-  width: 14px;
+  /* Wide, because this is being aimed at from across a plaza. */
+  width: 20px;
 }
 
 .drive-board-body::-webkit-scrollbar-track {
@@ -260,12 +266,16 @@ body {
 }
 
 .drive-board-body {
-  padding: 20px 24px 26px;
+  padding: 30px 36px 38px;
   /* The sections were typed for a full browser window, and their clamp()
-     sizes are keyed to vw. Inside an 800px panel that makes the hero type
-     absurd, so the panel becomes its own container and the display sizes are
+     sizes are keyed to vw. Inside a 1000px screen that makes the hero type
+     absurd, so the screen becomes its own container and the display sizes are
      re-derived from its width instead of the viewport's. */
   container-type: inline-size;
+  /* Nudges every em-relative size up together. The screen is read from tens
+     of metres away, so the whole body needs to run a size larger than it
+     would on a page held at arm's length. */
+  font-size: 18px;
 }
 
 .drive-board-body h1 {

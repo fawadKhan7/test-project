@@ -19,8 +19,10 @@ import { Keyboard, MapPin, Route } from "lucide-react";
 import { BOARD_ATTR, createControls, type TouchButton } from "@/lib/drive/controls";
 import { useMediaQuery } from "@/lib/drive/use-media-query";
 import { PANEL_IDS } from "@/lib/drive/world-map";
+import { cn } from "@/lib/utils";
 import { createRunner, type Runner, type Telemetry } from "./scene/runner";
 import {
+  ArrivalChip,
   ControlLegend,
   DestinationMenu,
   NavMap,
@@ -56,6 +58,7 @@ const IDLE: Telemetry = {
   hintDistance: null,
   turn: "straight",
   atBoard: null,
+  arrived: false,
 };
 
 /** Chrome around each in-world screen. */
@@ -284,23 +287,43 @@ export function DriveExperience({
 
       {/* ------------------------------------------------------------ HUD */}
       <div className="pointer-events-none absolute inset-0 z-10">
-        {/* Route map rides at the top of the frame, racing-game style, so it
-            never sits between the driver and the road. */}
-        <div className="absolute top-3 left-1/2 hidden -translate-x-1/2 sm:block">
-          <NavMap
-            canvasRef={minimapRef}
-            hint={telemetry.hint}
-            distance={telemetry.hintDistance}
-            turn={telemetry.turn}
-            atBoard={telemetry.atBoard ? META[telemetry.atBoard]?.short : null}
-          />
+        {/*
+          The driving instruments. They fade out on arrival: the section screen
+          is behind this exact part of the frame, and a speedometer reading zero
+          over a wall of text is pure obstruction. Faded rather than unmounted,
+          so they are already back in place by the time the cab is moving again.
+        */}
+        <div
+          className={cn(
+            "transition-opacity duration-300",
+            telemetry.arrived ? "opacity-0" : "opacity-100",
+          )}
+          aria-hidden={telemetry.arrived}
+        >
+          {/* Route map rides at the top of the frame, racing-game style, so it
+              never sits between the driver and the road. */}
+          <div className="absolute top-3 left-1/2 hidden -translate-x-1/2 sm:block">
+            <NavMap
+              canvasRef={minimapRef}
+              hint={telemetry.hint}
+              distance={telemetry.hintDistance}
+              turn={telemetry.turn}
+              atBoard={telemetry.atBoard ? META[telemetry.atBoard]?.short : null}
+              arrived={telemetry.arrived}
+            />
+          </div>
+
+          {!isTouch && (
+            <div className="absolute top-14 left-3 sm:top-16 sm:left-4">
+              <ControlLegend dimmed={hasDriven} />
+            </div>
+          )}
         </div>
 
-        <div className="absolute top-3 left-3 flex flex-col gap-2 sm:top-4 sm:left-4">
+        <div className="absolute top-3 left-3 sm:top-4 sm:left-4">
           <p className="font-display border-yellow bg-ink/85 text-yellow border-2 px-2.5 py-1 text-sm uppercase backdrop-blur-sm">
             Yellow Line
           </p>
-          {!isTouch && <ControlLegend dimmed={hasDriven} />}
         </div>
 
         <div className="pointer-events-auto absolute top-3 right-3 flex flex-col items-end gap-2 sm:top-4 sm:right-4">
@@ -327,7 +350,11 @@ export function DriveExperience({
               <OffRoadWarning onReset={handleReset} />
             </div>
           )}
-          <SpeedGauge mph={telemetry.mph} reversing={telemetry.reversing} />
+          {telemetry.arrived && telemetry.atBoard ? (
+            <ArrivalChip label={META[telemetry.atBoard]?.short ?? "Stop"} />
+          ) : (
+            <SpeedGauge mph={telemetry.mph} reversing={telemetry.reversing} />
+          )}
         </div>
 
         {isTouch && <TouchPad onPress={handleTouch} />}

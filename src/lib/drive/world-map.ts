@@ -183,37 +183,101 @@ export function routeTo(target: Destination): RoutePoint[] {
   ];
 }
 
-/* ------------------------------------------------- holographic section panels */
+/* ------------------------------------------------- holographic section screens */
 
 /**
- * Every section of the site is a hologram the cab projects in front of you
- * when you pull into a stop, rather than a billboard bolted to a wall.
+ * Every section of the site is a screen standing at its destination.
  *
- * The reason is comfort: a fixed board forces the driver to hunt for the one
- * parking spot where it reads well. A projected panel arrives already square
- * to the windscreen at a fixed distance, so you drive up, read, and drive off
- * without ever repositioning. It is still a real object in the world — it has
- * perspective, it drifts into place, and the road shows through it.
+ * Not projected onto the windscreen: *installed in the city*, the way an
+ * arrivals board is installed in a station. A panel pinned to the camera is
+ * always in the driver's way by definition — there is no head position that
+ * gets it out of the view, because it moves with the head. A screen bolted to
+ * a place has the opposite property: you approach it, it grows, you park in
+ * front of it, and driving away leaves it behind, all without a single frame
+ * where something is stuck to your face.
+ *
+ * It sits high and well back so the road under it stays drivable, and the
+ * camera pulls out to third person on arrival (see ./camera-rig) so the whole
+ * screen and your cab are in frame together.
  */
 export const HOLO = {
   /**
-   * CSS pixel size of the DOM element behind the panel. Chosen together with
-   * `screenFraction` so the content lands near 1:1 with the viewer's screen —
-   * big enough to read, small enough to leave the road visible round it.
+   * CSS pixel size of the DOM element behind the screen. Larger than a laptop
+   * viewport on purpose: this is a wall-sized display, and the extra room is
+   * what lets a whole section be read without scrolling.
    */
-  pxW: 800,
-  pxH: 460,
-  /** How far in front of the driver's eye it sits, in metres. */
-  distance: 9,
-  /** Fraction of the viewport width it should span. */
-  screenFraction: 0.55,
+  pxW: 1000,
+  pxH: 690,
+  /** Physical width of the screen, in metres. */
+  worldWidth: 26,
   /**
-   * Sits a touch below the eyeline — like a head-up display cast onto the
-   * bonnet. Keeps the top of the windscreen, the road signs and the nav strip
-   * clear while the panel is up.
+   * Height of the screen's centre. The number that matters is the *bottom*
+   * edge it implies — about 2.5m, comfortably above the driver's eyeline at
+   * 1.18m. That is what guarantees a screen this size can never cover the road
+   * surface ahead, however close you get to it: it is always above the horizon.
    */
-  riseY: -0.45,
+  centreY: 11.5,
+  /**
+   * How far beyond the parking bay the screen stands. Set together with the
+   * camera rig's pull-back so that parking in the bay puts the screen across
+   * the upper two-thirds of the frame with the cab in the lower quarter.
+   */
+  setBack: 18,
 } as const;
+
+export type PanelAnchor = {
+  x: number;
+  y: number;
+  z: number;
+  /** Y rotation that squares the screen to the arriving driver. */
+  rotY: number;
+};
+
+/** Unit vector the cab is travelling along as it arrives at a stop. */
+const approachVector = (approach: Approach): { x: number; z: number } =>
+  approach === "left" ? { x: -1, z: 0 } : approach === "right" ? { x: 1, z: 0 } : { x: 0, z: -1 };
+
+/** A screen standing at `at`, turned to face `target`. */
+const facing = (
+  at: { x: number; z: number },
+  target: { x: number; z: number },
+): PanelAnchor => ({
+  x: at.x,
+  y: HOLO.centreY,
+  z: at.z,
+  rotY: Math.atan2(target.x - at.x, target.z - at.z),
+});
+
+/**
+ * Straight out beyond the bay, square to the arriving driver — so it is
+ * already readable on arrival and there is never a "good angle" to hunt for.
+ * The plazas are dead ends, so a screen past the far edge is never in the way.
+ */
+const beyondBay = (d: Destination): PanelAnchor => {
+  const v = approachVector(d.approach);
+  return facing(
+    { x: d.x + v.x * HOLO.setBack, z: d.z + v.z * HOLO.setBack },
+    { x: d.x, z: d.z },
+  );
+};
+
+/** Where each section's screen stands. Keyed by panel id. */
+export const PANEL_ANCHORS: Record<string, PanelAnchor> = {
+  /**
+   * The depot is the one stop that is not a dead end — the boulevard carries
+   * straight on underneath it. A screen placed beyond the bay would therefore
+   * be something you drive *through* on your way out, which is precisely the
+   * failure this whole layout exists to avoid. So it stands off to one side of
+   * the forecourt and turns to face the bay: same reading position, but the
+   * road ahead stays completely clear.
+   *
+   * Set well forward as well as sideways. Close in and hard off to one side it
+   * would sit at the very edge of the wide driving lens, where perspective
+   * stretches it into an unreadable smear across the corner of the windscreen.
+   */
+  top: facing({ x: -14, z: SPAWN.z - 24 }, { x: SPAWN.x, z: SPAWN.z }),
+  ...Object.fromEntries(DESTINATIONS.map((d) => [d.id, beyondBay(d)])),
+};
 
 /** Panels, in the order they appear on the route. */
 export const PANEL_IDS = ["top", ...DESTINATIONS.map((d) => d.id)] as const;
