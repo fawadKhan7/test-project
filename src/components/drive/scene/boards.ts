@@ -68,8 +68,8 @@ const FAR_OUT = 92;
  * its screen, and the arrival camera aims at the screen by construction, so
  * the two cases that matter are both dead centre.
  */
-const AXIS_IN = Math.cos(THREE.MathUtils.degToRad(18));
-const AXIS_OUT = Math.cos(THREE.MathUtils.degToRad(34));
+const AXIS_IN = Math.cos(THREE.MathUtils.degToRad(14));
+const AXIS_OUT = Math.cos(THREE.MathUtils.degToRad(26));
 
 /** Fade rates, per second. Out is quicker than in, as with any exit. */
 const FADE_IN_RATE = 4.5;

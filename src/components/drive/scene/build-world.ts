@@ -30,15 +30,18 @@ import {
   DESTINATIONS,
   GANTRIES,
   JUNCTION_Z,
+  KERB_W,
   MAIN_ROAD,
+  PAVEMENT_W,
   PLAZAS,
   PLAZA_HALF,
   PLAZA_X,
   ROAD_HALF,
   SPAWN,
-  TERMINUS_Z,
   WORLD_BOUNDS,
-  isOnRoad,
+  boulevardHoles,
+  crossStreetHoles,
+  spans,
   type Rect,
 } from "@/lib/drive/world-map";
 import {
@@ -46,13 +49,19 @@ import {
   PAINT,
   SURFACE,
   YELLOW,
-  makeBuildingTexture,
   makeCheckerTexture,
   makeChevronBoard,
   makeDirectionSign,
   makeGlowTexture,
   makeRoadArrow,
 } from "./textures";
+import { buildCity } from "./city";
+import { buildProps } from "./props";
+import {
+  LANDMARK_SITES,
+  LANDMARK_STREET_HOLES,
+  buildLandmarks,
+} from "./landmarks";
 
 export type World = {
   group: THREE.Group;
@@ -61,47 +70,13 @@ export type World = {
   dispose(): void;
 };
 
-/** Deterministic RNG so the skyline is identical on every visit. */
-function rng(seed: number) {
-  let s = seed;
-  return () => {
-    s = (s * 1664525 + 1013904223) % 4294967296;
-    return s / 4294967296;
-  };
-}
-
 const rectW = (r: Rect) => r.maxX - r.minX;
 const rectD = (r: Rect) => r.maxZ - r.minZ;
 const rectCx = (r: Rect) => (r.minX + r.maxX) / 2;
 const rectCz = (r: Rect) => (r.minZ + r.maxZ) / 2;
 
-/** Kerb and footway dimensions. */
-const KERB_W = 0.7;
+/** Kerb height. Its width and the footway's come from the shared street model. */
 const KERB_H = 0.26;
-const PAVEMENT_W = 6;
-
-type Span = { from: number; to: number };
-
-/**
- * Splits a run into the pieces left over once the holes are removed.
- *
- * Used for the kerb and footway either side of every road. The holes are the
- * junctions and plaza mouths, so a turning is a real gap in a real kerb line
- * rather than a painted suggestion — the driver can see the opening itself.
- */
-function spans(from: number, to: number, holes: Array<[number, number]>): Span[] {
-  const sorted = [...holes].sort((a, b) => a[0] - b[0]);
-  const out: Span[] = [];
-  let cursor = from;
-  for (const [hFrom, hTo] of sorted) {
-    if (hTo <= cursor) continue;
-    if (hFrom > cursor) out.push({ from: cursor, to: Math.min(hFrom, to) });
-    cursor = Math.max(cursor, hTo);
-    if (cursor >= to) break;
-  }
-  if (cursor < to) out.push({ from: cursor, to });
-  return out.filter((s) => s.to - s.from > 1.5);
-}
 
 export function buildWorld(maxAnisotropy: number): World {
   const group = new THREE.Group();
@@ -189,13 +164,7 @@ export function buildWorld(maxAnisotropy: number): World {
 
   // Boulevard: kerb and footway down both sides, broken at every junction and
   // at the drop-off apron.
-  const junctionHoles = JUNCTION_Z.map(
-    (jz) => [jz - ROAD_HALF - 2, jz + ROAD_HALF + 2] as [number, number],
-  );
-  const boulevardSpans = spans(MAIN_ROAD.minZ, MAIN_ROAD.maxZ, [
-    ...junctionHoles,
-    [MAIN_ROAD.minZ, TERMINUS_Z + PLAZA_HALF + 4],
-  ]);
+  const boulevardSpans = spans(MAIN_ROAD.minZ, MAIN_ROAD.maxZ, boulevardHoles());
 
   for (const s of boulevardSpans) {
     const cz = (s.from + s.to) / 2;
@@ -215,11 +184,7 @@ export function buildWorld(maxAnisotropy: number): World {
   const crossFrom = -PLAZA_X - PLAZA_HALF;
   const crossTo = PLAZA_X + PLAZA_HALF;
   for (const jz of JUNCTION_Z) {
-    const crossSpans = spans(crossFrom, crossTo, [
-      [-ROAD_HALF - 2, ROAD_HALF + 2],
-      [-PLAZA_X - PLAZA_HALF, -PLAZA_X + PLAZA_HALF],
-      [PLAZA_X - PLAZA_HALF, PLAZA_X + PLAZA_HALF],
-    ]);
+    const crossSpans = spans(crossFrom, crossTo, crossStreetHoles());
     for (const s of crossSpans) {
       const cx = (s.from + s.to) / 2;
       const w = s.to - s.from;
@@ -475,52 +440,26 @@ export function buildWorld(maxAnisotropy: number): World {
     }
   }
 
-  /* -------------------------------------------------------------- buildings */
+  /* ------------------------------------------------- city, props, landmarks */
 
-  const buildingGeo = track(new THREE.BoxGeometry(1, 1, 1));
-  const tiers = [
-    { repeat: [2, 2] as const, min: 9, max: 18, list: [] as THREE.Matrix4[] },
-    { repeat: [2, 4] as const, min: 18, max: 32, list: [] as THREE.Matrix4[] },
-    { repeat: [3, 7] as const, min: 32, max: 58, list: [] as THREE.Matrix4[] },
-  ];
+  // Three layers, deliberately separated by how far away they work: the
+  // skyline you navigate by, the street furniture you measure speed against,
+  // and the handful of one-off landmarks that make the map memorable.
+  const landmarks = buildLandmarks(maxAnisotropy);
+  group.add(landmarks.group);
 
-  const rand = rng(20260726);
-  const PLOT = 26;
-  for (let x = WORLD_BOUNDS.minX - 60; x < WORLD_BOUNDS.maxX + 60; x += PLOT) {
-    for (let z = WORLD_BOUNDS.minZ - 60; z < WORLD_BOUNDS.maxZ + 60; z += PLOT) {
-      const cx = x + rand() * 8 - 4;
-      const cz = z + rand() * 8 - 4;
-      const w = 10 + rand() * 9;
-      const d = 10 + rand() * 9;
+  const city = buildCity(
+    maxAnisotropy,
+    new THREE.Box2(
+      new THREE.Vector2(WORLD_BOUNDS.minX - 80, WORLD_BOUNDS.minZ - 80),
+      new THREE.Vector2(WORLD_BOUNDS.maxX + 80, WORLD_BOUNDS.maxZ + 80),
+    ),
+    LANDMARK_SITES,
+  );
+  group.add(city.group);
 
-      // Clear the footway as well as the carriageway, so the buildings sit
-      // behind the pavement rather than growing out of the kerb.
-      if (isOnRoad(cx, cz, Math.max(w, d) / 2 + 11)) continue;
-      if (rand() < 0.22) continue;
-
-      const h = 9 + rand() ** 2.2 * 49;
-      const tier = tiers.find((t) => h >= t.min && h < t.max) ?? tiers[2];
-
-      const m = new THREE.Matrix4();
-      m.compose(
-        new THREE.Vector3(cx, h / 2, cz),
-        new THREE.Quaternion(),
-        new THREE.Vector3(w, h, d),
-      );
-      tier.list.push(m);
-    }
-  }
-
-  tiers.forEach((tier, i) => {
-    if (tier.list.length === 0) return;
-    const tex = track(makeBuildingTexture(i + 3, maxAnisotropy));
-    tex.repeat.set(tier.repeat[0], tier.repeat[1]);
-    const mat = track(new THREE.MeshLambertMaterial({ map: tex }));
-    const mesh = new THREE.InstancedMesh(buildingGeo, mat, tier.list.length);
-    tier.list.forEach((m, j) => mesh.setMatrixAt(j, m));
-    mesh.instanceMatrix.needsUpdate = true;
-    group.add(mesh);
-  });
+  const props = buildProps(maxAnisotropy, LANDMARK_STREET_HOLES);
+  group.add(props.group);
 
   /* ------------------------------------------------------------------ signs */
 
@@ -648,8 +587,13 @@ export function buildWorld(maxAnisotropy: number): World {
     update(elapsed: number) {
       // Lamps breathe very slightly so the world never looks frozen.
       glowMat.opacity = 0.5 + Math.sin(elapsed * 1.1) * 0.04;
+      props.update(elapsed);
+      landmarks.update(elapsed);
     },
     dispose() {
+      city.dispose();
+      props.dispose();
+      landmarks.dispose();
       for (const d of disposables) d.dispose();
       group.traverse((o) => {
         if (o instanceof THREE.InstancedMesh) o.dispose();

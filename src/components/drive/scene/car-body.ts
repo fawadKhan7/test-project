@@ -21,7 +21,7 @@ import { SURFACE, YELLOW, makeCheckerTexture, makeMirrorTag } from "./textures";
 
 export type CarBody = {
   group: THREE.Group;
-  update(steer: number, wheelSpin: number): void;
+  update(steer: number, wheelSpin: number, braking: boolean): void;
   dispose(): void;
 };
 
@@ -75,7 +75,7 @@ export function buildCarBody(maxAnisotropy: number): CarBody {
     new THREE.MeshLambertMaterial({ color: SURFACE.kerb, emissive: 0x3c3e42 }),
   );
   const lampMat = track(new THREE.MeshBasicMaterial({ color: 0xfff3cc }));
-  const tailMat = track(new THREE.MeshBasicMaterial({ color: 0xff7a1a }));
+  const tailMat = track(new THREE.MeshBasicMaterial({ color: 0x7a3208 }));
 
   const box = (
     w: number,
@@ -204,8 +204,13 @@ export function buildCarBody(maxAnisotropy: number): CarBody {
   return {
     group,
 
-    update(steer, wheelSpin) {
+    update(steer, wheelSpin, braking) {
       for (const w of wheels) w.spin.rotation.x = wheelSpin;
+
+      // The camera now lives behind the car, so the tail lights are on screen
+      // permanently — which makes them the most direct feedback the driver has
+      // that the brake is actually doing something.
+      tailMat.color.setHex(braking ? 0xff3a12 : 0x7a3208);
       // Negative: positive steer input turns the car right, which is a
       // negative Y rotation in this right-handed, -Z-forward space.
       for (const w of steered) w.pivot.rotation.y = -steer * WHEEL_LOCK;

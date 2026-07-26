@@ -195,6 +195,8 @@ body {
   width: 100%;
   flex-direction: column;
   overflow: hidden;
+  /* So the header can size its title against the screen's own width. */
+  container-type: inline-size;
   border: 5px solid var(--yellow);
   background: rgba(9, 9, 9, 0.92);
   box-shadow:
@@ -225,17 +227,20 @@ body {
 }
 
 .drive-board-head p {
-  font-size: 19px;
+  font-size: 15px;
   font-weight: 700;
-  letter-spacing: 0.2em;
+  letter-spacing: 0.18em;
   text-transform: uppercase;
   color: var(--ink);
 }
 
+/* Sized in cqw so the longest title in the set ("You're in the driving
+   seat") still fits one line at the screen's width, instead of being tuned to
+   whichever one happened to be on screen when the number was picked. */
 .drive-board-head h2 {
-  margin-top: 4px;
+  margin-top: 2px;
   font-family: var(--font-display), system-ui, sans-serif;
-  font-size: 52px;
+  font-size: clamp(1.6rem, 5cqw, 3.2rem);
   line-height: 0.95;
   text-transform: uppercase;
   color: var(--ink);
@@ -266,9 +271,9 @@ body {
 }
 
 .drive-board-body {
-  padding: 30px 36px 38px;
+  padding: 26px 30px 30px;
   /* The sections were typed for a full browser window, and their clamp()
-     sizes are keyed to vw. Inside a 1000px screen that makes the hero type
+     sizes are keyed to vw. Inside a screen this size that makes the hero type
      absurd, so the screen becomes its own container and the display sizes are
      re-derived from its width instead of the viewport's. */
   container-type: inline-size;
@@ -279,20 +284,66 @@ body {
 }
 
 .drive-board-body h1 {
-  font-size: clamp(1.25rem, 4.4cqw, 2.2rem);
+  font-size: clamp(1.6rem, 5.6cqw, 3.4rem);
+  line-height: 0.9;
 }
 
 .drive-board-body h2 {
-  font-size: clamp(1.05rem, 3.2cqw, 1.6rem);
+  font-size: clamp(1.2rem, 3.8cqw, 2.2rem);
 }
 
 .drive-board-body h3 {
-  font-size: clamp(0.9rem, 2cqw, 1.1rem);
+  font-size: clamp(1rem, 2.6cqw, 1.4rem);
 }
 
 /* Long-form copy stays inside a readable measure whatever the panel width. */
 .drive-board-body p {
   max-width: 62ch;
+}
+
+/* ---------- The welcome screen -------------------------------------------
+   The one board that is pure hero: no lists, no form, nothing to scroll. It
+   gets to fill its screen rather than sit in the top-left corner of it, and
+   its supporting type runs a size larger than the section boards because
+   there is room for it and it is the first thing anyone reads. */
+
+[data-drive-board="top"] .drive-board-body {
+  display: flex;
+  flex-direction: column;
+}
+
+/* Centres the hero without the clipping `justify-content: center` causes once
+   content is taller than the box. */
+[data-drive-board="top"] .drive-board-body > * {
+  margin-block: auto;
+  width: 100%;
+}
+
+/* The bump is for prose and the call to action only. The trust badges sit in a
+   four-across row with a fixed height; scaling them too just wraps each label
+   onto a second line it has no room for. */
+[data-drive-board="top"] .drive-board-body :is(p, a) {
+  font-size: 1.05em;
+}
+
+[data-drive-board="top"] .drive-board-body h1 {
+  font-size: clamp(1.8rem, 6.4cqw, 3.9rem);
+}
+
+/* The hero is a two-column marketing layout, built for a browser window where
+   the headline sits beside a sidebar of trust badges. On a 16:9 screen read
+   from thirty metres that split is what breaks it: half the width at this type
+   size wraps the headline four ways and shreds the badges into two-line
+   fragments. One column fixes both — the headline gets the full span and stays
+   on two lines, and the badges become a single row beneath it. */
+[data-drive-board="top"] #top {
+  display: flex;
+  flex-direction: column;
+  gap: 0.85rem;
+}
+
+[data-drive-board="top"] #top > ul {
+  grid-template-columns: repeat(4, minmax(0, 1fr));
 }
 
 @keyframes drive-pulse {

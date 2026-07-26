@@ -15,7 +15,6 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
-import { Keyboard, MapPin, Route } from "lucide-react";
 import { BOARD_ATTR, createControls, type TouchButton } from "@/lib/drive/controls";
 import { useMediaQuery } from "@/lib/drive/use-media-query";
 import { PANEL_IDS } from "@/lib/drive/world-map";
@@ -161,9 +160,12 @@ export function DriveExperience({
         onVisit: handleVisit,
         onContextLost: onSkip,
       });
-    } catch {
+    } catch (error) {
       // Context creation failed outright. Hand the visitor the readable site,
       // on the next tick so we aren't re-rendering the tree that mounts us.
+      // Logged because the fallback is silent by design: without this, a scene
+      // that throws is indistinguishable from a machine without WebGL.
+      console.error("Drive unavailable, falling back to the readable site", error);
       controls.dispose();
       controlsRef.current = null;
       queueMicrotask(onSkip);
@@ -198,68 +200,16 @@ export function DriveExperience({
 
   const boardContent: DriveSections = {
     ...sections,
-    top: (
-      <div className="flex flex-col gap-6">
-        <section
-          aria-label="How to drive"
-          className="border-yellow bg-ink-soft border-2 p-4"
-        >
-          <p className="text-yellow flex items-center gap-2 text-[0.7rem] font-bold tracking-[0.2em] uppercase">
-            <Keyboard className="h-4 w-4" aria-hidden="true" strokeWidth={2.5} />
-            {isTouch ? "Use the on-screen pedals" : "Use your keyboard"}
-          </p>
+    /*
+      The welcome screen is the hero and nothing else.
 
-          <ul className="mt-3 grid grid-cols-2 gap-2">
-            {[
-              ["W or ↑", "Accelerate"],
-              ["S or ↓", "Brake, then reverse"],
-              ["A / D or ← / →", "Steer"],
-              ["Space", "Handbrake"],
-            ].map(([k, label]) => (
-              <li key={k} className="flex items-center gap-2.5">
-                <span className="tabular border-ink-line bg-ink text-yellow shrink-0 border px-2 py-1 text-xs font-bold">
-                  {k}
-                </span>
-                <span className="text-cream-dim text-sm">{label}</span>
-              </li>
-            ))}
-          </ul>
-
-          {/* Names the two cues the road itself provides, in the order a
-              driver meets them. Everything else about the layout is meant to
-              be self-explanatory; these two are worth one sentence each
-              because they are the difference between exploring and guessing. */}
-          <ul className="text-cream-dim mt-4 flex flex-col gap-2.5 text-sm">
-            <li className="flex items-start gap-2">
-              <Route
-                className="text-yellow mt-0.5 h-4 w-4 shrink-0"
-                aria-hidden="true"
-                strokeWidth={2.5}
-              />
-              <span>
-                Follow the chevrons painted down the road — they always point
-                at your next stop, and they swing through the junction you
-                need to take.
-              </span>
-            </li>
-            <li className="flex items-start gap-2">
-              <MapPin
-                className="text-yellow mt-0.5 h-4 w-4 shrink-0"
-                aria-hidden="true"
-                strokeWidth={2.5}
-              />
-              <span>
-                Each column of light is a section of this site. Pull into the
-                bay under one and it opens in front of you; drive off and it
-                clears itself away.
-              </span>
-            </li>
-          </ul>
-        </section>
-
-        {hero}
-      </div>
-    ),
+      It used to carry a keyboard chart and a note on how the road cues work,
+      which duplicated the control legend in the corner of the HUD and pushed
+      the actual headline off the bottom of the screen. The screen a visitor
+      meets first should show them what this place *is*; the driving is taught
+      by the legend, the prompt to pull away, and the road itself.
+    */
+    top: hero,
   };
 
   return (
@@ -313,11 +263,6 @@ export function DriveExperience({
             />
           </div>
 
-          {!isTouch && (
-            <div className="absolute top-14 left-3 sm:top-16 sm:left-4">
-              <ControlLegend dimmed={hasDriven} />
-            </div>
-          )}
         </div>
 
         <div className="absolute top-3 left-3 sm:top-4 sm:left-4">
@@ -341,6 +286,13 @@ export function DriveExperience({
             visited={visited}
             onSelect={handleWaypoint}
           />
+
+          {/* How to drive, parked under the route controls rather than opposite
+              them. Grouping the two things a newcomer needs — where can I go,
+              and how do I get there — into one corner leaves the rest of the
+              frame to the road, and keeps the legend clear of the section
+              screen in the middle. It dims once they have actually driven. */}
+          {!isTouch && !menuOpen && <ControlLegend dimmed={hasDriven} />}
         </div>
 
         <div className="absolute bottom-3 left-1/2 flex -translate-x-1/2 flex-col items-center gap-2 sm:bottom-5">

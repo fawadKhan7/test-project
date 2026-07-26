@@ -103,6 +103,63 @@ export const WORLD_BOUNDS: Rect = {
   maxZ: SPAWN.z + 50,
 };
 
+/* ------------------------------------------------------- street furniture */
+
+/** Width of the raised kerb at the edge of every carriageway. */
+export const KERB_W = 0.7;
+/** Width of the footway behind it. */
+export const PAVEMENT_W = 6;
+
+export type Span = { from: number; to: number };
+
+/**
+ * Splits a run into the pieces left over once the holes are removed.
+ *
+ * Everything that lines a street — kerb, footway, shopfronts, trees, parked
+ * cars — has to break at the same places: junction mouths and plaza
+ * entrances. Deriving them all from this one function is what keeps those
+ * breaks aligned, so a turning is a clean gap through every layer at once
+ * rather than a kerb that stops in a different place from the shops behind it.
+ */
+export function spans(
+  from: number,
+  to: number,
+  holes: Array<[number, number]>,
+  minLength = 1.5,
+): Span[] {
+  const sorted = [...holes].sort((a, b) => a[0] - b[0]);
+  const out: Span[] = [];
+  let cursor = from;
+  for (const [hFrom, hTo] of sorted) {
+    if (hTo <= cursor) continue;
+    if (hFrom > cursor) out.push({ from: cursor, to: Math.min(hFrom, to) });
+    cursor = Math.max(cursor, hTo);
+    if (cursor >= to) break;
+  }
+  if (cursor < to) out.push({ from: cursor, to });
+  return out.filter((s) => s.to - s.from > minLength);
+}
+
+/**
+ * The holes a boulevard-side run has to break for: every junction mouth, and
+ * the drop-off apron at the far end.
+ */
+export function boulevardHoles(): Array<[number, number]> {
+  return [
+    ...JUNCTION_Z.map((jz) => [jz - ROAD_HALF - 2, jz + ROAD_HALF + 2] as [number, number]),
+    [MAIN_ROAD.minZ, TERMINUS_Z + PLAZA_HALF + 4] as [number, number],
+  ];
+}
+
+/** And the holes a cross-street run has to break for. */
+export function crossStreetHoles(): Array<[number, number]> {
+  return [
+    [-ROAD_HALF - 2, ROAD_HALF + 2],
+    [-PLAZA_X - PLAZA_HALF, -PLAZA_X + PLAZA_HALF],
+    [PLAZA_X - PLAZA_HALF, PLAZA_X + PLAZA_HALF],
+  ];
+}
+
 export function isInside(r: Rect, x: number, z: number, pad = 0): boolean {
   return x >= r.minX - pad && x <= r.maxX + pad && z >= r.minZ - pad && z <= r.maxZ + pad;
 }
@@ -202,14 +259,25 @@ export function routeTo(target: Destination): RoutePoint[] {
  */
 export const HOLO = {
   /**
-   * CSS pixel size of the DOM element behind the screen. Larger than a laptop
-   * viewport on purpose: this is a wall-sized display, and the extra room is
-   * what lets a whole section be read without scrolling.
+   * CSS pixel size of the DOM element behind the screen, and its physical
+   * width in metres. Together these set how large the type reads.
+   *
+   * The tempting lever is to cut the pixel width — fewer CSS pixels across the
+   * same metres makes every pixel bigger. It also makes the *layout* narrower,
+   * and the hero is a two-column grid that needs about a thousand pixels to
+   * breathe; squeeze it and the headline wraps four ways and the trust chips
+   * shred. So the pixel width stays, and the screen grows physically instead:
+   * same layout, 1.23× the size on screen.
+   *
+   * The height is cut to pay for it. A 26:18 screen grown to 32m wide would
+   * reach down to half a metre off the road — below the driver's eyeline, and
+   * therefore across the road ahead, which is the one thing this layout must
+   * never do. At 16:9 it grows sideways only and the bottom edge stays put.
    */
   pxW: 1000,
-  pxH: 690,
+  pxH: 560,
   /** Physical width of the screen, in metres. */
-  worldWidth: 26,
+  worldWidth: 32,
   /**
    * Height of the screen's centre. The number that matters is the *bottom*
    * edge it implies — about 2.5m, comfortably above the driver's eyeline at

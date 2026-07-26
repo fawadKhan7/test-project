@@ -180,16 +180,70 @@ export function makeDirectionSign(
   return finish(c, aniso);
 }
 
-/** Building facade: dark slab pricked with warm windows, some lit. */
-export function makeBuildingTexture(seed: number, aniso: number): THREE.CanvasTexture {
+/**
+ * Building facades.
+ *
+ * One skyline built from one texture reads as wallpaper — the eye picks up the
+ * repeat within seconds and the city stops being a place. So there is a family
+ * of them here, differing in the things that actually distinguish real
+ * buildings at night: the *grain* of the window grid (a tenement and a glass
+ * tower have wildly different window counts), how much of it is lit at all,
+ * and whether the light is warm or cold.
+ *
+ * Warm and cold matters more than it sounds. A block of flats is lamplight; an
+ * empty office is fluorescent. Mixing the two across the skyline is most of
+ * what makes it look inhabited rather than generated.
+ */
+export type FacadeKind =
+  | "tenement"
+  | "office"
+  | "ribbon"
+  | "tower"
+  | "slab"
+  | "warehouse";
+
+type FacadeSpec = {
+  wall: string;
+  cols: number;
+  rows: number;
+  /** Fraction of windows with any light behind them. */
+  lit: number;
+  cool: boolean;
+  /** Draws a structural band every N floors. */
+  band?: number;
+  /** Windows as a fraction of their cell. */
+  fill: [number, number];
+};
+
+const FACADES: Record<FacadeKind, FacadeSpec> = {
+  // Low, dense, warm — homes. The most "lived in" of the set.
+  tenement: { wall: "#241f1c", cols: 5, rows: 7, lit: 0.72, cool: false, fill: [0.56, 0.6] },
+  // Mid-rise offices: mostly dark at this hour, a few floors still working.
+  office: { wall: "#1a1d24", cols: 7, rows: 9, lit: 0.34, cool: true, band: 3, fill: [0.74, 0.52] },
+  // Horizontal ribbon glazing — reads as strong lines from a distance.
+  ribbon: { wall: "#191c22", cols: 3, rows: 10, lit: 0.5, cool: true, fill: [0.92, 0.36] },
+  // Fine-grained glass tower, sparsely lit, cold.
+  tower: { wall: "#161920", cols: 10, rows: 14, lit: 0.28, cool: true, fill: [0.66, 0.62] },
+  // Big warm slab blocks, generously lit.
+  slab: { wall: "#1e2028", cols: 6, rows: 8, lit: 0.6, cool: false, band: 4, fill: [0.62, 0.58] },
+  // Industrial: few, wide, high windows and a lot of blank wall.
+  warehouse: { wall: "#20211f", cols: 4, rows: 4, lit: 0.45, cool: false, fill: [0.7, 0.3] },
+};
+
+const WARM_LIGHTS = [YELLOW, "#c99f16", "#8a7413", "#3a3208"];
+const COOL_LIGHTS = ["#d7e9f5", "#9ab6c8", "#5f7d92", "#232f38"];
+
+export function makeFacadeTexture(
+  kind: FacadeKind,
+  seed: number,
+  aniso: number,
+): THREE.CanvasTexture {
   const W = 256;
   const H = 256;
   const { c, ctx } = canvas(W, H);
+  const spec = FACADES[kind];
 
-  // A touch lighter and cooler than the ink used elsewhere, so the skyline
-  // reads as a mass of buildings against the night rather than as a hole in
-  // it — the road needs something to be bounded *by*.
-  ctx.fillStyle = "#1a1d24";
+  ctx.fillStyle = spec.wall;
   ctx.fillRect(0, 0, W, H);
 
   // Deterministic pseudo-random so the skyline is stable across reloads.
@@ -199,24 +253,42 @@ export function makeBuildingTexture(seed: number, aniso: number): THREE.CanvasTe
     return s / 233280;
   };
 
-  const cols = 6;
-  const rows = 8;
-  const padX = 12;
-  const padY = 10;
-  const cw = (W - padX * 2) / cols;
-  const ch = (H - padY * 2) / rows;
+  const padX = 10;
+  const padY = 8;
+  const cw = (W - padX * 2) / spec.cols;
+  const ch = (H - padY * 2) / spec.rows;
+  const palette = spec.cool ? COOL_LIGHTS : WARM_LIGHTS;
 
-  for (let r = 0; r < rows; r++) {
-    for (let col = 0; col < cols; col++) {
-      const lit = rand();
-      if (lit < 0.42) continue;
-      ctx.fillStyle = lit > 0.88 ? YELLOW : lit > 0.62 ? "#8a7413" : "#3a3208";
+  for (let r = 0; r < spec.rows; r++) {
+    // Whole floors go dark together far more often than individual rooms do,
+    // which is what gives a real building its banded look after hours.
+    const floorDark = rand() < 0.22;
+
+    for (let col = 0; col < spec.cols; col++) {
+      const roll = rand();
+      if (floorDark ? roll > 0.12 : roll > spec.lit) continue;
+
+      const brightness = rand();
+      ctx.fillStyle =
+        brightness > 0.9
+          ? palette[0]
+          : brightness > 0.62
+            ? palette[1]
+            : brightness > 0.32
+              ? palette[2]
+              : palette[3];
+
       ctx.fillRect(
-        padX + col * cw + cw * 0.16,
-        padY + r * ch + ch * 0.18,
-        cw * 0.68,
-        ch * 0.58,
+        padX + col * cw + (cw * (1 - spec.fill[0])) / 2,
+        padY + r * ch + (ch * (1 - spec.fill[1])) / 2,
+        cw * spec.fill[0],
+        ch * spec.fill[1],
       );
+    }
+
+    if (spec.band && r % spec.band === spec.band - 1) {
+      ctx.fillStyle = "rgba(0,0,0,0.55)";
+      ctx.fillRect(0, padY + (r + 1) * ch - ch * 0.1, W, ch * 0.16);
     }
   }
 
@@ -224,6 +296,132 @@ export function makeBuildingTexture(seed: number, aniso: number): THREE.CanvasTe
   tex.wrapS = THREE.RepeatWrapping;
   tex.wrapT = THREE.RepeatWrapping;
   return tex;
+}
+
+/** Lit retail at street level: awnings, glowing windows, a doorway between. */
+export function makeShopfrontTexture(aniso: number): THREE.CanvasTexture {
+  const W = 512;
+  const H = 256;
+  const { c, ctx } = canvas(W, H);
+
+  ctx.fillStyle = "#15171c";
+  ctx.fillRect(0, 0, W, H);
+
+  let s = 7717;
+  const rand = () => {
+    s = (s * 9301 + 49297) % 233280;
+    return s / 233280;
+  };
+
+  const units = 4;
+  const uw = W / units;
+
+  for (let i = 0; i < units; i++) {
+    const x = i * uw;
+    const warm = rand();
+
+    // Glowing shop window, sitting on the pavement.
+    ctx.fillStyle = warm > 0.72 ? "#fff0b0" : warm > 0.4 ? "#e8c65a" : "#5a4a12";
+    ctx.fillRect(x + uw * 0.08, H * 0.42, uw * 0.56, H * 0.46);
+
+    // Doorway beside it, darker.
+    ctx.fillStyle = "#2a2417";
+    ctx.fillRect(x + uw * 0.7, H * 0.46, uw * 0.2, H * 0.42);
+
+    // Awning above, in the city's yellow.
+    ctx.fillStyle = rand() > 0.5 ? YELLOW : "#d9b400";
+    ctx.fillRect(x + uw * 0.04, H * 0.3, uw * 0.9, H * 0.09);
+
+    // Fascia sign board over the awning.
+    ctx.fillStyle = "#0d0f12";
+    ctx.fillRect(x + uw * 0.04, H * 0.1, uw * 0.9, H * 0.18);
+    ctx.fillStyle = warm > 0.55 ? YELLOW : "#7a6a2a";
+    ctx.fillRect(x + uw * 0.12, H * 0.16, uw * (0.3 + rand() * 0.45), H * 0.06);
+  }
+
+  const tex = finish(c, aniso);
+  tex.wrapS = THREE.RepeatWrapping;
+  tex.wrapT = THREE.RepeatWrapping;
+  return tex;
+}
+
+/** Clock face for the tower landmark — readable as a shape from a long way off. */
+export function makeClockFace(aniso: number): THREE.CanvasTexture {
+  const S = 256;
+  const { c, ctx } = canvas(S, S);
+  const r = S / 2;
+
+  ctx.fillStyle = INK;
+  ctx.fillRect(0, 0, S, S);
+
+  ctx.beginPath();
+  ctx.arc(r, r, r * 0.86, 0, Math.PI * 2);
+  ctx.fillStyle = CREAM;
+  ctx.fill();
+
+  ctx.strokeStyle = INK;
+  ctx.lineWidth = 12;
+  ctx.stroke();
+
+  // Hour ticks.
+  ctx.fillStyle = INK;
+  for (let i = 0; i < 12; i++) {
+    const a = (i / 12) * Math.PI * 2;
+    const long = i % 3 === 0;
+    ctx.save();
+    ctx.translate(r + Math.sin(a) * r * 0.72, r - Math.cos(a) * r * 0.72);
+    ctx.rotate(a);
+    ctx.fillRect(-5, -(long ? 18 : 10), 10, long ? 36 : 20);
+    ctx.restore();
+  }
+
+  // Hands, parked at ten past ten — the angle every clock in every advert
+  // uses, because it frames the dial instead of cutting across it.
+  ctx.strokeStyle = INK;
+  ctx.lineCap = "round";
+  ctx.lineWidth = 16;
+  ctx.beginPath();
+  ctx.moveTo(r, r);
+  ctx.lineTo(r - r * 0.38, r - r * 0.3);
+  ctx.stroke();
+  ctx.lineWidth = 12;
+  ctx.beginPath();
+  ctx.moveTo(r, r);
+  ctx.lineTo(r + r * 0.3, r - r * 0.55);
+  ctx.stroke();
+
+  ctx.beginPath();
+  ctx.arc(r, r, 12, 0, Math.PI * 2);
+  ctx.fill();
+
+  return finish(c, aniso);
+}
+
+/** Vertical neon blade sign, the kind bolted to the corner of an old hotel. */
+export function makeNeonSign(text: string, aniso: number): THREE.CanvasTexture {
+  const W = 128;
+  const H = 512;
+  const { c, ctx } = canvas(W, H);
+  const font = displayFont();
+
+  ctx.fillStyle = "#0c0d10";
+  ctx.fillRect(0, 0, W, H);
+  ctx.strokeStyle = YELLOW;
+  ctx.lineWidth = 6;
+  ctx.strokeRect(6, 6, W - 12, H - 12);
+
+  const letters = text.toUpperCase().split("");
+  const step = (H - 40) / letters.length;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillStyle = YELLOW;
+  const size = Math.min(step * 0.78, W * 0.62);
+  ctx.font = `${size}px ${font}`;
+  letters.forEach((ch, i) => {
+    ctx.fillText(ch, W / 2, 24 + step * (i + 0.5));
+  });
+
+  return finish(c, aniso);
 }
 
 /**

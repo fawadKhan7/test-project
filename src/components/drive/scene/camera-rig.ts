@@ -2,12 +2,18 @@
  * The camera, and the one decision it makes: are we driving, or have we
  * arrived?
  *
- * Driving is first person, from the driver's eye inside the cab. Arriving
- * swings the camera out and back until the cab and the destination's screen
- * are in frame together, like stepping out to look at an arrivals board. The
- * two poses are blended, never cut between, so the visitor keeps their bearings
- * — they can see the same taxi the whole way through the move, which is what
- * stops a viewpoint change from reading as a scene change.
+ * Driving is a chase camera, sitting behind and above the cab. Arriving swings
+ * it further out and round until the cab and the destination's screen are in
+ * frame together. The two are blended, never cut between, so the visitor keeps
+ * their bearings — the taxi is on screen the whole way through the move, which
+ * is what stops a viewpoint change from reading as a scene change.
+ *
+ * The chase pose is not computed and applied directly; it is a target the
+ * camera *eases toward*, and the lag is the point. A rigidly attached camera
+ * gives you a car that appears motionless in a moving world, because nothing
+ * on screen ever changes relative to anything else. Letting the camera fall
+ * behind through a corner and catch up on the straight is most of what makes
+ * the cab feel like it has mass.
  *
  * Nothing here takes control away. The blend runs to "arrived" on its own when
  * you stop at a stop, and starts running back the instant you touch a pedal;
@@ -16,19 +22,46 @@
 
 import * as THREE from "three";
 
-/** Field of view when driving. Wide, to open up the windscreen. */
-export const DRIVE_FOV = 80;
+/** Field of view when driving. Speed widens it from here. */
+export const DRIVE_FOV = 68;
 /**
- * Narrower on arrival. A long lens is what makes a 22m screen 40m away read
- * as a wall of text rather than a distant billboard, and it flattens the
+ * Narrower on arrival. A long lens is what makes a 26m screen 40m away read as
+ * a wall of text rather than a distant billboard, and it flattens the
  * perspective so the content stays square to the reader.
  */
 export const ARRIVED_FOV = 45;
 
+/* ------------------------------------------------------------ chase camera */
+
 /**
- * The arrival framing. These three are one setting, not three, and they are
- * tuned against HOLO.setBack so that parking in a bay puts the screen across
- * roughly the top 70% of the frame and the whole cab in the bottom 20%.
+ * Distance behind the cab at rest, and how much further at full speed.
+ *
+ * Close enough that the taxi is the subject of the shot rather than a detail
+ * in it — at this range its livery, its wheels turning and its brake lights
+ * are all legible, which is the whole reason for being outside the car.
+ */
+const CHASE_BACK = 5.3;
+const CHASE_BACK_AT_SPEED = 1.6;
+/** Height above the road. Low enough to see the road surface and its markings. */
+const CHASE_HEIGHT = 2.8;
+/** The camera aims at a point out in front of the cab, not at the cab itself. */
+const LOOK_AHEAD = 8;
+const LOOK_Y = 1.6;
+
+/**
+ * How fast the camera catches up, per second. Deliberately different for
+ * position and aim: the body lags through a corner while the gaze stays on the
+ * road ahead, which is how a chase shot is actually filmed.
+ */
+const FOLLOW_RATE = 7;
+const AIM_RATE = 9.5;
+
+/* ---------------------------------------------------------- arrival camera */
+
+/**
+ * These three are one setting, not three, and they are tuned against
+ * HOLO.setBack so that parking in a bay puts the screen across roughly the top
+ * 70% of the frame and the whole cab in the bottom 20%.
  */
 const BACK_OFF = 15;
 const RISE = 4.2;
@@ -39,46 +72,55 @@ const AIM_DROP = 4;
 const ENTER_SECONDS = 1.0;
 const EXIT_SECONDS = 0.6;
 
-/** Below this blend the cab interior is drawn; above it, the exterior. */
-export const SHELL_SWAP = 0.35;
-
 export type RigFrame = {
   camera: THREE.PerspectiveCamera;
   dt: number;
   /** Whether the cab is parked at a stop right now. */
   arrived: boolean;
-  /** The driver's eye, in the body rig's local space. */
-  eye: THREE.Vector3;
-  /** The rig carrying the car's roll, pitch and bob. */
-  body: THREE.Object3D;
-  /** Extra camera-only roll, radians. */
+  /** The car rig: world position and heading, without the body's roll and bob. */
+  car: THREE.Object3D;
+  /** Camera roll, radians — a little lean into the corners. */
   roll: number;
+  /** 0..1 of top speed, which pushes the camera back and widens the lens. */
+  speedRatio: number;
   /** The arrived-at screen's world position, if there is one. */
   anchor: THREE.Vector3 | null;
-  /** First-person field of view for this frame; speed widens it. */
+  /** Driving field of view for this frame; speed widens it. */
   driveFov: number;
 };
 
 export type CameraRig = {
-  /** 0 = driving (first person), 1 = arrived (third person). */
+  /** 0 = driving (chase), 1 = arrived. */
   readonly blend: number;
+  /** Drops the follow lag, for teleports. Otherwise the camera flies the map. */
+  snap(): void;
   update(frame: RigFrame): void;
 };
 
 const smoothstep = (t: number) => t * t * (3 - 2 * t);
+/** Frame-rate independent exponential approach. */
+const approach = (rate: number, dt: number) => 1 - Math.exp(-rate * dt);
 
 export function createCameraRig(): CameraRig {
   let raw = 0;
   let blend = 0;
+  let placed = false;
 
-  const fpPos = new THREE.Vector3();
-  const fpQuat = new THREE.Quaternion();
+  const chasePos = new THREE.Vector3();
+  const chaseAim = new THREE.Vector3();
+  const wantPos = new THREE.Vector3();
+  const wantAim = new THREE.Vector3();
+
+  const carPos = new THREE.Vector3();
+  const forward = new THREE.Vector3();
+  const carQuat = new THREE.Quaternion();
+
+  const driveQuat = new THREE.Quaternion();
   const rollQuat = new THREE.Quaternion();
   const rollAxis = new THREE.Vector3(0, 0, 1);
 
   const tpPos = new THREE.Vector3();
   const tpQuat = new THREE.Quaternion();
-  const carPos = new THREE.Vector3();
   const aim = new THREE.Vector3();
   const away = new THREE.Vector3();
   const lookMatrix = new THREE.Matrix4();
@@ -89,22 +131,51 @@ export function createCameraRig(): CameraRig {
       return blend;
     },
 
-    update({ camera, dt, arrived, eye, body, roll, anchor, driveFov }) {
+    snap() {
+      placed = false;
+    },
+
+    update({ camera, dt, arrived, car, roll, speedRatio, anchor, driveFov }) {
       // Only hold the arrival view while there is somewhere to look at.
       const wants = arrived && anchor !== null;
       const seconds = wants ? ENTER_SECONDS : EXIT_SECONDS;
       raw = THREE.MathUtils.clamp(raw + ((wants ? 1 : -1) * dt) / seconds, 0, 1);
       blend = smoothstep(raw);
 
-      /* --- first person: the driver's eye, carried by the body rig -------- */
-      body.updateWorldMatrix(true, false);
-      fpPos.copy(eye).applyMatrix4(body.matrixWorld);
-      body.getWorldQuaternion(fpQuat);
-      fpQuat.multiply(rollQuat.setFromAxisAngle(rollAxis, roll));
+      /* --- chase: behind the cab, looking down the road ------------------- */
+      car.updateWorldMatrix(true, false);
+      car.getWorldPosition(carPos);
+      car.getWorldQuaternion(carQuat);
+      forward.set(0, 0, -1).applyQuaternion(carQuat).setY(0);
+      if (forward.lengthSq() < 1e-6) forward.set(0, 0, -1);
+      forward.normalize();
+
+      const back = CHASE_BACK + speedRatio * CHASE_BACK_AT_SPEED;
+      wantPos
+        .copy(carPos)
+        .addScaledVector(forward, -back)
+        .setY(carPos.y + CHASE_HEIGHT);
+      wantAim
+        .copy(carPos)
+        .addScaledVector(forward, LOOK_AHEAD)
+        .setY(carPos.y + LOOK_Y);
+
+      if (!placed) {
+        chasePos.copy(wantPos);
+        chaseAim.copy(wantAim);
+        placed = true;
+      } else {
+        chasePos.lerp(wantPos, approach(FOLLOW_RATE, dt));
+        chaseAim.lerp(wantAim, approach(AIM_RATE, dt));
+      }
+
+      lookMatrix.lookAt(chasePos, chaseAim, UP);
+      driveQuat.setFromRotationMatrix(lookMatrix);
+      driveQuat.multiply(rollQuat.setFromAxisAngle(rollAxis, roll));
 
       if (blend <= 0.0001 || !anchor) {
-        camera.position.copy(fpPos);
-        camera.quaternion.copy(fpQuat);
+        camera.position.copy(chasePos);
+        camera.quaternion.copy(driveQuat);
         if (Math.abs(camera.fov - driveFov) > 0.01) {
           camera.fov = driveFov;
           camera.updateProjectionMatrix();
@@ -112,15 +183,12 @@ export function createCameraRig(): CameraRig {
         return;
       }
 
-      /* --- third person: behind the cab, on the cab→screen axis ----------- */
-      body.getWorldPosition(carPos);
-      carPos.y = 0;
-
+      /* --- arrival: further back, on the cab→screen axis ------------------ */
+      away.subVectors(carPos, anchor).setY(0);
       // Straight back from the screen, through the car and out the other side.
       // Derived from the screen rather than the car's heading on purpose: how
       // neatly the visitor happened to park should not change the framing.
-      away.subVectors(carPos, anchor).setY(0);
-      if (away.lengthSq() < 1) away.set(0, 0, 1);
+      if (away.lengthSq() < 1) away.copy(forward).negate();
       away.normalize();
 
       tpPos.copy(carPos).addScaledVector(away, BACK_OFF).setY(RISE);
@@ -129,8 +197,8 @@ export function createCameraRig(): CameraRig {
       lookMatrix.lookAt(tpPos, aim, UP);
       tpQuat.setFromRotationMatrix(lookMatrix);
 
-      camera.position.lerpVectors(fpPos, tpPos, blend);
-      camera.quaternion.slerpQuaternions(fpQuat, tpQuat, blend);
+      camera.position.lerpVectors(chasePos, tpPos, blend);
+      camera.quaternion.slerpQuaternions(driveQuat, tpQuat, blend);
 
       const fov = THREE.MathUtils.lerp(driveFov, ARRIVED_FOV, blend);
       if (Math.abs(camera.fov - fov) > 0.01) {

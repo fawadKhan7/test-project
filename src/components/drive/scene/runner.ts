@@ -30,11 +30,10 @@ import {
 import { MAX_SPEED, createVehicle, stepVehicle, toMph } from "@/lib/drive/vehicle";
 import { readInput, type Controls } from "@/lib/drive/controls";
 import { buildWorld } from "./build-world";
-import { buildCockpit } from "./cockpit";
 import { buildCarBody } from "./car-body";
 import { buildBoards, screenPosition } from "./boards";
 import { buildNavRoute } from "./nav-route";
-import { DRIVE_FOV, SHELL_SWAP, createCameraRig } from "./camera-rig";
+import { DRIVE_FOV, createCameraRig } from "./camera-rig";
 import { PAINT, SURFACE, YELLOW, makeGlowTexture } from "./textures";
 
 /** Night blue-black rather than pure black: it separates sky from tarmac. */
@@ -139,24 +138,18 @@ export function createRunner(opts: RunnerOptions): Runner {
   const carGroup = new THREE.Group();
   scene.add(carGroup);
 
-  // Body sits between the car and the camera so load transfer tilts the
-  // interior, the shell and the view together, the way a real body roll would.
+  // Body sits between the car and its shell so load transfer leans the cab
+  // itself — visible from behind, which is where the camera now lives. The
+  // camera deliberately does *not* hang off this: inheriting the bob would put
+  // the shake on the whole world instead of on the car.
   const bodyGroup = new THREE.Group();
   carGroup.add(bodyGroup);
 
-  // Two shells for the same car: the interior frames the road while driving,
-  // the exterior is what you have arrived to look at. Exactly one is ever
-  // drawn — see SHELL_SWAP below.
-  const cockpit = buildCockpit(maxAniso);
-  bodyGroup.add(cockpit.group);
-
   const carBody = buildCarBody(maxAniso);
-  carBody.group.visible = false;
   bodyGroup.add(carBody.group);
 
-  // Wide by road-car standards, on purpose: it opens up the windscreen so
-  // more of the junction is visible without leaving the driver's seat. The rig
-  // owns its transform, so it lives in the scene rather than on the car.
+  // The rig owns the camera's transform, so it lives in the scene rather than
+  // on the car.
   const camera = new THREE.PerspectiveCamera(DRIVE_FOV, 1, 0.05, 700);
   scene.add(camera);
   const rig = createCameraRig();
@@ -171,12 +164,15 @@ export function createRunner(opts: RunnerOptions): Runner {
     blending: THREE.AdditiveBlending,
     depthWrite: false,
   });
-  const beamGeo = new THREE.PlaneGeometry(16, 42);
+  // Tighter than it was when the camera sat inside the car: from behind, the
+  // whole pool is on screen at once, and anything larger reads as a painted
+  // patch travelling with the cab rather than as its headlights.
+  const beamGeo = new THREE.PlaneGeometry(11, 30);
   const beam = new THREE.Mesh(beamGeo, beamMat);
   beam.rotation.x = -Math.PI / 2;
   // Rides just above kerb height for the same reason the lamp pools do: laid
   // flat it would slice a hard line through every kerb it crosses.
-  beam.position.set(0, 0.34, -20);
+  beam.position.set(0, 0.34, -14);
   carGroup.add(beam);
 
   /* ------------------------------------------------------------- vehicle */
@@ -400,7 +396,6 @@ export function createRunner(opts: RunnerOptions): Runner {
   // Resolved on the first frame, from whichever zone the cab spawns in.
   let anchor: THREE.Vector3 | null = null;
   let driveFov = DRIVE_FOV;
-  const eye = cockpit.eye.clone();
 
   /** Frame-rate independent approach, matching the one the physics uses. */
   const approach = (current: number, target: number, rate: number, dt: number) =>
@@ -440,21 +435,23 @@ export function createRunner(opts: RunnerOptions): Runner {
     bodyGroup.position.y = bob + shakeY;
     bodyGroup.position.x = shakeX;
 
-    // Head lean: the driver's eye drifts a touch into the corner.
-    eye.set(cockpit.eye.x - viewLean * 0.03, cockpit.eye.y, cockpit.eye.z);
-
     // Speed widens the lens. This does most of the work in making 26 m/s
     // actually feel fast on a screen.
     driveFov = approach(driveFov, DRIVE_FOV + speedRatio * 12, 3.5, dt);
 
-    cockpit.update(vehicle.steer, toMph(vehicle.speed), vehicle.speed < -0.2);
-    carBody.update(vehicle.steer, vehicle.wheelSpin);
+    // Braking only counts while actually moving forward — the same key is
+    // reverse once stopped, and lighting the brakes for it would be a lie.
+    carBody.update(
+      vehicle.steer,
+      vehicle.wheelSpin,
+      vehicle.brakePedal > 0.05 && vehicle.speed > 0.2,
+    );
     world.update(elapsed);
     nav.update(dt, elapsed);
 
-    // Headlight spill, dimmed once the camera is outside the car — from there
-    // it is a flat glowing sheet on the tarmac rather than light on the road.
-    beamMat.opacity = (0.34 + speedRatio * 0.22) * (1 - rig.blend * 0.75);
+    // Headlight spill, eased off once the camera swings round for an arrival:
+    // seen from the side it is a flat glowing sheet rather than light on a road.
+    beamMat.opacity = (0.3 + speedRatio * 0.2) * (1 - rig.blend * 0.8);
 
     /* --- which section are we at? ---------------------------------------- */
     const mph = toMph(vehicle.speed);
@@ -480,18 +477,12 @@ export function createRunner(opts: RunnerOptions): Runner {
       camera,
       dt,
       arrived,
-      eye,
-      body: bodyGroup,
-      roll: -viewLean * 0.035,
+      car: carGroup,
+      roll: -viewLean * 0.045,
+      speedRatio,
       anchor,
       driveFov,
     });
-
-    // Exactly one shell, swapped while the camera is moving fastest through
-    // the roof, where the change is least visible.
-    const outside = rig.blend > SHELL_SWAP;
-    cockpit.group.visible = !outside;
-    carBody.group.visible = outside;
 
     /* --- render ---------------------------------------------------------- */
     renderer.render(scene, camera);
@@ -550,6 +541,9 @@ export function createRunner(opts: RunnerOptions): Runner {
       // Point back up the boulevard so the driver is never left facing a wall.
       vehicle.heading =
         Math.abs(vehicle.x) > PLAZA_X - 30 ? (Math.PI / 2) * Math.sign(vehicle.x) : 0;
+      // The chase camera lags by design; without this it would fly across the
+      // city to catch up with a cab that teleported.
+      rig.snap();
     },
 
     setWaypoint(id) {
@@ -565,7 +559,6 @@ export function createRunner(opts: RunnerOptions): Runner {
       boards.dispose();
       nav.dispose();
       world.dispose();
-      cockpit.dispose();
       carBody.dispose();
       beamGeo.dispose();
       beamMat.dispose();
